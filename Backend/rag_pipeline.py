@@ -1,8 +1,9 @@
 import os
 import re
 import json
+import requests
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, List
 from dotenv import load_dotenv
 from exa_py import Exa
 from sqlalchemy.orm import Session
@@ -13,7 +14,42 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import Chroma
 from langchain_core.output_parsers import StrOutputParser
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_core.embeddings import Embeddings
+
+class JinaEmbeddings(Embeddings):
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "jina-embeddings-v5-text-small",
+            "task": "retrieval.passage",
+            "normalized": True,
+            "input": texts
+        }
+        response = requests.post("https://api.jina.ai/v1/embeddings", headers=headers, json=payload)
+        response.raise_for_status()
+        return [item["embedding"] for item in response.json()["data"]]
+
+    def embed_query(self, text: str) -> List[float]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "jina-embeddings-v5-text-small",
+            "task": "retrieval.query",
+            "normalized": True,
+            "input": [text]
+        }
+        response = requests.post("https://api.jina.ai/v1/embeddings", headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()["data"][0]["embedding"]
 
 # =========================================================
 # LOAD ENV
@@ -97,46 +133,14 @@ class RagResult:
 
 # Embedding provider selection.
 #
-# OpenRouter proxies embeddings but bills them against the same credit balance
-# as chat, and signals exhaustion badly: it returns HTTP 200 with the real
-# reason buried in the JSON body ("Prompt tokens limit exceeded: 5000 > 971"),
-# which the openai SDK discards, surfacing only "No embedding data received".
-# Gemini's free tier covers embeddings, so prefer it when a key is present.
-#
-# IMPORTANT: these providers emit different vector dimensionalities (Gemini
-# 3072, ada-002 1536) and are not interchangeable against an existing index.
+# IMPORTANT: these providers emit different vector dimensionalities.
 # Changing provider requires wiping the Chroma collection and re-ingesting
 # every document — see reindex_all_documents() in this module.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-EMBEDDING_PROVIDER = "unset"
-
-if GEMINI_API_KEY:
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-    # text-embedding-004 is retired (404 on v1beta as of 2026-07); the current
-    # generally-available model is gemini-embedding-001. The library defaults
-    # task_type to RETRIEVAL_DOCUMENT when embedding documents and
-    # RETRIEVAL_QUERY when embedding a query, which is what RAG wants.
-    embedding_func = GoogleGenerativeAIEmbeddings(
-        google_api_key=GEMINI_API_KEY,
-        model="models/gemini-embedding-001",
-    )
-    EMBEDDING_PROVIDER = "gemini:gemini-embedding-001"
-elif OPENAI_API_KEY:
-    embedding_func = OpenAIEmbeddings(
-        api_key=OPENAI_API_KEY,
-        model="text-embedding-3-small",
-    )
-    EMBEDDING_PROVIDER = "openai:text-embedding-3-small"
-else:
-    embedding_func = OpenAIEmbeddings(
-        api_key=OPENROUTER_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
-        model="openai/text-embedding-ada-002",
-    )
-    EMBEDDING_PROVIDER = "openrouter:openai/text-embedding-ada-002"
+EMBEDDING_PROVIDER = "jina:jina-embeddings-v5-text-small"
+embedding_func = JinaEmbeddings(
+    api_key=os.getenv("JINA_API_KEY")
+)
 
 _provider_family = EMBEDDING_PROVIDER.split(":", 1)[0]
 _env_threshold = os.getenv("RELEVANCE_THRESHOLD")
@@ -148,6 +152,8 @@ RELEVANCE_THRESHOLD = (
 
 print(f"[embeddings] provider: {EMBEDDING_PROVIDER} | relevance threshold: {RELEVANCE_THRESHOLD}")
 
+# NOTE: The database must be rebuilt because embedding dimensions/provider changed.
+# If a persistence directory already exists (e.g. chroma_db), it must be manually rebuilt.
 vectorstore = Chroma(
     persist_directory=CHROMA_PERSIST_DIR,
     embedding_function=embedding_func
