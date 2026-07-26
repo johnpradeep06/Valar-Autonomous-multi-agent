@@ -46,8 +46,7 @@ _RELEVANCE_THRESHOLD_BY_PROVIDER = {
     # on-topic top scores 0.655-0.769, off-topic 0.366-0.395. 0.50 sits in the
     # 0.26-wide gap with margin on both sides.
     "gemini": 0.50,
-    # Legacy value. ada-002 scored on-topic ~0.85; 0.15 was permissive and
-    # leaned on the prompt's refusal rule rather than filtering much itself.
+    "jina":0.30,
     "openrouter": 0.15,
     "openai": 0.15,
 }
@@ -109,21 +108,17 @@ class RagResult:
 # every document — see reindex_all_documents() in this module.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+JINA_API_KEY = os.getenv("JINA_API_KEY")
 
 EMBEDDING_PROVIDER = "unset"
 
-if GEMINI_API_KEY:
-    from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-    # text-embedding-004 is retired (404 on v1beta as of 2026-07); the current
-    # generally-available model is gemini-embedding-001. The library defaults
-    # task_type to RETRIEVAL_DOCUMENT when embedding documents and
-    # RETRIEVAL_QUERY when embedding a query, which is what RAG wants.
-    embedding_func = GoogleGenerativeAIEmbeddings(
-        google_api_key=GEMINI_API_KEY,
-        model="models/gemini-embedding-001",
+if JINA_API_KEY:
+    embedding_func = OpenAIEmbeddings(
+        api_key=JINA_API_KEY,
+        base_url="https://api.jina.ai/v1",
+        model="jina-embeddings-v3",
     )
-    EMBEDDING_PROVIDER = "gemini:gemini-embedding-001"
+    EMBEDDING_PROVIDER = "jina:jina-embeddings-v3"
 elif OPENAI_API_KEY:
     embedding_func = OpenAIEmbeddings(
         api_key=OPENAI_API_KEY,
