@@ -82,8 +82,7 @@ _RELEVANCE_THRESHOLD_BY_PROVIDER = {
     # on-topic top scores 0.655-0.769, off-topic 0.366-0.395. 0.50 sits in the
     # 0.26-wide gap with margin on both sides.
     "gemini": 0.50,
-    # Legacy value. ada-002 scored on-topic ~0.85; 0.15 was permissive and
-    # leaned on the prompt's refusal rule rather than filtering much itself.
+    "jina":0.30,
     "openrouter": 0.15,
     "openai": 0.15,
 }
@@ -136,7 +135,6 @@ class RagResult:
 # IMPORTANT: these providers emit different vector dimensionalities.
 # Changing provider requires wiping the Chroma collection and re-ingesting
 # every document — see reindex_all_documents() in this module.
-
 EMBEDDING_PROVIDER = "jina:jina-embeddings-v5-text-small"
 embedding_func = JinaEmbeddings(
     api_key=os.getenv("JINA_API_KEY")
