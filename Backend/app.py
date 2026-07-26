@@ -31,7 +31,9 @@ from auth import (
 from rag_pipeline import (
     rag_answer, ingest_document, delete_document_chunks, serialize_citations,
     generate_follow_ups, run_agentic_rag_stream, describe_llm_failure,
+    RELEVANCE_THRESHOLD,
 )
+from settings_manager import load_settings, save_settings, DEFAULT_SETTINGS
 from multi_agent_pipeline import run_multi_agent_pipeline_stream
 
 # Create Tables, then patch in any newly added columns on existing DBs
@@ -882,6 +884,19 @@ def ask_rag_session_stream(
                     source_type=payload.get("source_type", "none"),
                     detail=f"session={session.id}",
                 )
+
+                # Record knowledge gap / failed retrieval if context was sparse, missing, web fallback, or errored
+                src_type = payload.get("source_type", "none")
+                highest_score = payload.get("highest_score", 0.0)
+                is_err = payload.get("error", False)
+                if is_err or src_type in ["web", "none"] or highest_score < RELEVANCE_THRESHOLD:
+                    save_db.add(FailedRetrieval(
+                        query_text=query.question,
+                        highest_score=highest_score,
+                        fallback_triggered=(src_type == "web"),
+                    ))
+                    save_db.commit()
+
                 return asst_msg.id
             finally:
                 save_db.close()
@@ -1034,12 +1049,12 @@ def submit_feedback(
 
 
 # -------------------------
-# Analytics & Knowledge Gaps (Admin/Manager Only)
+# Analytics & Knowledge Gaps
 # -------------------------
 
 @app.get("/analytics/gaps", response_model=AnalyticsGapsResponse)
 def get_analytics_gaps(
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     total_queries = db.query(ChatMessage).filter(ChatMessage.role == "user").count()
@@ -1075,7 +1090,7 @@ def get_analytics_gaps(
 
 @app.get("/analytics/feedback")
 def get_feedback_analytics(
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Aggregate answer quality from real user feedback."""
@@ -1120,7 +1135,7 @@ def get_feedback_analytics(
 def get_audit_log(
     limit: int = 100,
     action: str | None = None,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Read the append-only audit trail."""
@@ -1155,24 +1170,23 @@ _ACTIVITY_ACTION_LABELS = {
     "query": "Query",
     "feedback": "Feedback",
     "create_user": "User Created",
+    "settings_update": "Settings Updated",
+    "settings_reset": "Settings Reset",
 }
 
 
 @app.get("/analytics/activity")
 def get_activity_log(
     limit: int = 100,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Same audit trail as /analytics/audit, reshaped to {username, action,
-    target, timestamp} for the dashboard's Activity Logs tab, which was built
-    against that field naming before /analytics/audit existed."""
+    target, timestamp} for the dashboard's Activity Logs tab."""
     rows = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(min(limit, 500)).all()
 
     result = []
     for r in rows:
-        # query_text (the actual question) is more useful here than detail
-        # (which for "query" rows is just internal session bookkeeping).
         target = r.query_text or r.detail
         if target and len(target) > 120:
             target = target[:120] + "…"
@@ -1186,12 +1200,12 @@ def get_activity_log(
 
 
 # -------------------------
-# FAQ Management (Admin/Manager Only)
+# FAQ Management
 # -------------------------
 
 @app.get("/faq", response_model=list[FAQRuleResponse])
 def get_faq_rules(
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     return db.query(FAQRule).all()
@@ -1200,7 +1214,7 @@ def get_faq_rules(
 @app.post("/faq", response_model=FAQRuleResponse, status_code=status.HTTP_201_CREATED)
 def create_faq_rule(
     rule: FAQRuleCreate,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     existing = db.query(FAQRule).filter(func.lower(FAQRule.keyword) == func.lower(rule.keyword)).first()
@@ -1221,7 +1235,7 @@ def create_faq_rule(
 @app.delete("/faq/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_faq_rule(
     id: int,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     db_rule = db.query(FAQRule).filter(FAQRule.id == id).first()
@@ -1232,6 +1246,40 @@ def delete_faq_rule(
     db.commit()
     write_audit(db, current_user, "delete_faq", detail=keyword)
     return
+
+
+# -------------------------
+# System Settings
+# -------------------------
+
+@app.get("/settings")
+def get_settings_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    return load_settings()
+
+
+@app.post("/settings")
+def save_settings_endpoint(
+    new_settings: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current = load_settings()
+    current.update(new_settings)
+    save_settings(current)
+    write_audit(db, current_user, "settings_update", detail="Updated system configuration settings")
+    return current
+
+
+@app.post("/settings/reset")
+def reset_settings_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    save_settings(DEFAULT_SETTINGS.copy())
+    write_audit(db, current_user, "settings_reset", detail="Reset system configuration to defaults")
+    return DEFAULT_SETTINGS.copy()
 
 
 @app.get("/")

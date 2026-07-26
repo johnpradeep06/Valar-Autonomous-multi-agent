@@ -181,6 +181,7 @@ export default function AdminPage() {
             if (res.ok) {
                 showToast("Settings updated successfully", "success");
                 setIsSettingsOpen(false);
+                fetchActivityLogs();
             } else {
                 showToast("Failed to update settings", "error");
             }
@@ -210,6 +211,7 @@ export default function AdminPage() {
                 setEnableFailedLogging(data.enable_failed_logging);
                 setSystemPrompt(data.system_prompt);
                 showToast("Settings reset to defaults", "success");
+                fetchActivityLogs();
             } else {
                 showToast("Failed to reset settings", "error");
             }
@@ -322,6 +324,7 @@ export default function AdminPage() {
             setDeleteState(prev => ({ ...prev, [filename]: "done" }));
             showToast(`Document "${filename}" deleted successfully`, "success");
             fetchFiles(); // refresh list
+            fetchActivityLogs();
             setTimeout(() => setDeleteState(prev => ({ ...prev, [filename]: "idle" })), 3000);
         } catch (err: any) {
             setDeleteState(prev => ({ ...prev, [filename]: `error` }));
@@ -368,6 +371,7 @@ export default function AdminPage() {
                 setNewKeyword("");
                 setNewResponse("");
                 fetchFaqs();
+                fetchActivityLogs();
                 showToast("FAQ rule added successfully", "success");
             } else {
                 const errorData = await res.json();
@@ -388,6 +392,7 @@ export default function AdminPage() {
             });
             if (res.ok) {
                 fetchFaqs();
+                fetchActivityLogs();
                 showToast("FAQ rule deleted successfully", "success");
             } else {
                 showToast("Failed to delete FAQ rule", "error");
@@ -521,6 +526,30 @@ export default function AdminPage() {
         }
     }, [router]);
 
+    // Live polling for Analytics & Activity Logs based on active tab
+    useEffect(() => {
+        if (loading) return;
+
+        let interval: NodeJS.Timeout | null = null;
+        if (activeTab === 'analytics') {
+            fetchAnalytics();
+            fetchFeedback();
+            interval = setInterval(() => {
+                fetchAnalytics();
+                fetchFeedback();
+            }, 5000);
+        } else if (activeTab === 'activity') {
+            fetchActivityLogs();
+            interval = setInterval(() => {
+                fetchActivityLogs();
+            }, 5000);
+        }
+
+        return () => {
+            if (interval) clearInterval(interval);
+        };
+    }, [activeTab, loading]);
+
     // Poll for files that are actively being indexed in the background
     useEffect(() => {
         const hasProcessing = files.some(f => f.status === 'queued' || f.status === 'processing');
@@ -586,7 +615,7 @@ export default function AdminPage() {
 
 
                     <button
-                        onClick={() => setActiveTab('analytics')}
+                        onClick={() => { setActiveTab('analytics'); fetchAnalytics(); fetchFeedback(); }}
                         className={cn("pb-3 font-medium transition-all relative flex items-center gap-1.5", activeTab === 'analytics' ? "text-accent-text font-semibold" : "hover:text-text-primary")}
                     >
                         <BarChart2 size={15} />
@@ -610,7 +639,7 @@ export default function AdminPage() {
                         {/* TAB 1: Documents Management */}
                         {activeTab === 'documents' && (
                             <>
-                                <UploadComponent onUploadSuccess={fetchFiles} />
+                                <UploadComponent onUploadSuccess={() => { fetchFiles(); fetchActivityLogs(); }} />
 
                                 <div className="bg-card-background border border-border-default rounded-2xl p-6 shadow-xl flex-1 flex flex-col min-h-[300px]">
                                     <h3 className="font-medium text-text-primary flex items-center gap-2 mb-4">

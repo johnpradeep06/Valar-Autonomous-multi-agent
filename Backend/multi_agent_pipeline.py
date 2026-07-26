@@ -230,7 +230,8 @@ def run_multi_agent_pipeline_stream(
             "confidence": 0.0,
             "claims_verification": [],
             "overall_trust_score": 0.0,
-            "source_type": "none"
+            "source_type": "none",
+            "highest_score": 0.0
         }
         return
 
@@ -263,7 +264,8 @@ def run_multi_agent_pipeline_stream(
                 "confidence": 0.0,
                 "claims_verification": [],
                 "overall_trust_score": 0.0,
-                "source_type": "none"
+                "source_type": "none",
+                "highest_score": 0.0
             }
             return
             
@@ -393,4 +395,5 @@ def run_multi_agent_pipeline_stream(
         "claims_verification": verified_claims,
         "overall_trust_score": overall_trust_score,
         "source_type": source_type,
+        "highest_score": round(float(highest_score), 3),
     }
